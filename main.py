@@ -66,6 +66,17 @@ def get_directional_vector(directions):
 def get_directional_vector3(directions):
     return to_vec3(get_directional_vector(directions))
 
+def draw_text(screen, text, pos=(0,0), color=None, **flags):
+    if color == None: color = Colors.BLACK
+    text = str(text)
+    
+    antialias = False
+    for k in flags:
+        if k == "antialias": antialias = flags[k]
+    
+    textsurface = Globals.game.font.render(text, antialias, color)  # "text", antialias, color
+    screen.blit(textsurface, pos)
+
 
 class Colors:
     WHITE = (255, 255, 255)
@@ -79,8 +90,8 @@ class Colors:
 
 
 class Constants:
-    DEFAULT_FRICTION = 0.01
-    DEFAULT_MOVEMENT_FORCE = DEFAULT_FRICTION * 200000
+    DEFAULT_FRICTION = 5
+    DEFAULT_MOVEMENT_FORCE = 3000
 
     
 class Globals:
@@ -152,16 +163,14 @@ class ImageRenderer:
             x = actor.pos.x - self.image.width/2
             y = actor.pos.y - self.image.height/2 
             
-            if self.shadow and actor.pos.z >= -0.0001: 
+            if self.shadow:# and actor.pos.z >= 0:
                 pg.draw.circle(screen, (0,0,0, 125), to_vec2(actor.pos), actor.collision.radius)
             
             self.image.draw(screen, x, y - actor.pos.z)
             
-            if self.shadow and actor.pos.z < -0.0001: 
-                pg.draw.circle(screen, (0,0,0, 125), to_vec2(actor.pos), actor.collision.radius)
+            # if self.shadow and actor.pos.z < 0:
+            #     pg.draw.circle(screen, (0,0,0, 125), to_vec2(actor.pos), actor.collision.radius)
             
-            # raise Exception("Actor image is not defined")
-
 
 
 class Actor(Object):
@@ -174,22 +183,32 @@ class Actor(Object):
         self.vel: Vec3 = Vec3(0, 0, 0)
         self.acc: Vec3 = Vec3(0, 0, 0)
 
-        self.friction: Number = Constants.DEFAULT_FRICTION
+        self.friction = Constants.DEFAULT_FRICTION
         self._forces: List[Vec3] = []
+        
+        self.gravity_force = Vec3(0, 0, -6.674 * 300)
+        
+        self.density = 0.2 # 1.0 represents tensity of water
+        self.buoyancy_force = Vec3()
         
         self.renderer = ImageRenderer()
     
     def update(self, dt: float) -> None:
-        # Apply friction
-        # self.apply_force(-self.vel * self.friction)
+        self.apply_force(self.gravity_force)
         
+        # Buoyancy on water
+        if self.pos.z <= 0:
+            self.buoyancy_force = -self.gravity_force / self.density
+            self.apply_force(self.buoyancy_force)
+        
+        self.apply_force(-self.vel * self.friction)
         self.acc = Vec3()
         for f in self._forces:
             self.acc += f
         
         self._forces.clear()
         self.vel += self.acc * dt
-        self.vel *= self.friction ** dt
+        # self.vel *= self.friction ** dt
         
         self.pos += self.vel * dt
         
@@ -290,22 +309,22 @@ class Player(CollidableActor):
         self.typ = 0
         
         self.renderer.shadow = True
-        self.renderer.set_image(Image("./img/player.png", (64, 64)))
+        self.renderer.set_image(Image("./assets/img/player.png", (64, 64)))
         # self.renderer.shadow = True
 
     def update(self, dt):
         self.do_movement(dt)
         
-        if self.typ == 0:
-            super().update(dt)
-        elif self.typ == 1:
-            super().update2(dt)
-    
-    def draw(self, screen):
-        pg.draw.circle(screen, (0,80,0, 125), to_vec2(self.pos), self.collision.radius)
-        # pg.draw.circle(screen, (0,80,0, 125), to_vec2(self.pos), self.collision.radius)
+        super().update(dt)
         
+    def draw(self, screen):
         super().draw(screen)
+        
+        # pg.draw.circle(screen, (0,80,0, 125), to_vec2(self.pos), self.collision.radius)
+        pos = Vec3(round(self.pos.x,1), round(self.pos.y,1), round(self.pos.z,1))
+        
+        # draw_text(screen, str(self.pos), to_vec2(self.pos) + Vec2(0, 40))
+        
 
     def do_movement(self, dt) -> None:
         dir = get_directional_vector3(self.controls.move)
@@ -318,8 +337,13 @@ class Player(CollidableActor):
         
         if self.is_diving:
             self.current_force = self.diving_force
+            self.apply_force(Vec3(0, 0, -6000))
         else:
             self.current_force = self.swimming_force
+            
+        if is_key_down(pg.K_a):
+            self.apply_force(Vec3(0, 0, 3000))
+            
 
 
 class Ball(CollidableActor):
@@ -341,7 +365,7 @@ class Ball(CollidableActor):
         
     def draw(self, screen) -> None:
         pg.draw.circle(screen, Colors.GREEN, to_vec2(self.pos), self.radius)
-        
+    
     def on_collision(self, other, dt):
         self.apply_force(self.kick_multiplier * other.vel.length() * (1/dt) * -self.get_nomalized_vector_to(other))
 
@@ -390,7 +414,9 @@ class Game:
             dt = self._clock.tick(self.fps) / 1000
             
     def init(self):
-        player = Player(30, 30) \
+        self.font = pg.font.Font("./assets/fonts/Nunito-Regular.ttf", 35)
+        
+        player = Player(self.width/2, self.height/2) \
             .set_collision(SphereCollision(40)) \
             .set_solid(True)
         player.typ = 0
@@ -403,7 +429,7 @@ class Game:
         # player2.typ = 1
         # self.new_actor(player2)
         
-        ball = Ball(200, 200) \
+        ball = Ball(self.width/2 + 200, self.height/2) \
             .set_radius(30) \
             .set_solid(True)
         self.new_actor(ball)
