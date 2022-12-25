@@ -2,6 +2,7 @@ import sys
 import pygame as pg
 from typing import *
 import random
+import math
 
 Vec2 = pg.math.Vector2
 Vec3 = pg.math.Vector3
@@ -81,6 +82,9 @@ class Constants:
     DEFAULT_FRICTION = 0.01
     DEFAULT_MOVEMENT_FORCE = DEFAULT_FRICTION * 200000
 
+    
+class Globals:
+    game = None
      
      
 class Image:
@@ -126,6 +130,40 @@ class Object:
         self._delete_me = True
         
         
+        
+class ImageRenderer:
+    def __init__(self, **flags) -> None:
+        self.shadow = False
+        self.shadow_opacity = 128
+        self.image = None
+        # for key in flags:
+        #     if key == "shadow": self.shadow = flags[key]
+        #     if key == "shadow_opacity": self.shadow_opacity = flags[key]
+
+    def set_image(self, image: Image|str):
+        if type(image) == Image:
+            self.image = image
+        elif type(image) == str:
+            self.image = Image(image)
+        return self    
+
+    def render(self, screen, actor):
+        if self.image:            
+            x = actor.pos.x - self.image.width/2
+            y = actor.pos.y - self.image.height/2 
+            
+            if self.shadow and actor.pos.z >= -0.0001: 
+                pg.draw.circle(screen, (0,0,0, 125), to_vec2(actor.pos), actor.collision.radius)
+            
+            self.image.draw(screen, x, y - actor.pos.z)
+            
+            if self.shadow and actor.pos.z < -0.0001: 
+                pg.draw.circle(screen, (0,0,0, 125), to_vec2(actor.pos), actor.collision.radius)
+            
+            # raise Exception("Actor image is not defined")
+
+
+
 class Actor(Object):
     """
     Object with a position, velocity and subject to forces.
@@ -139,14 +177,7 @@ class Actor(Object):
         self.friction: Number = Constants.DEFAULT_FRICTION
         self._forces: List[Vec3] = []
         
-        self.image: Image|None = None
-    
-    def set_image(self, image: Image|str):
-        if type(image) == Image:
-            self.image = image
-        elif type(image) == str:
-            self.image = Image(image)
-        return self
+        self.renderer = ImageRenderer()
     
     def update(self, dt: float) -> None:
         # Apply friction
@@ -163,17 +194,26 @@ class Actor(Object):
         self.pos += self.vel * dt
         
     def draw(self, screen: pg.Surface) -> None:
-        if self.image:
-            self.image.draw(screen, self.pos.x - self.image.width/2, self.pos.y - self.image.height/2)
-            # raise Exception("Actor image is not defined")
-    
-    def apply_force(self, force: Vec) -> None:
-        assert isinstance(force, Vec), f"Attempt to apply non-vector force: {type(force)}"
+        self.renderer.render(screen, self)
         
-        direction = to_vec3(force)
+    def apply_force(self, force: Vec) -> None:
+        assert isinstance(force, Vec), f"Attempt to apply non-vector force: type {type(force)}"
+        
+        force = to_vec3(force)
         self._forces.append(force)
         return self
 
+    def distance(self, other):
+        return math.sqrt(self.distance_sq(other))
+
+    def distance_sq(self, other):
+        return (self.pos.x - other.pos.x)**2 + (self.pos.y - other.pos.y)**2
+
+    def get_vector_to(self, other):
+        return Vec3(other.pos.x - self.pos.x, other.pos.y - self.pos.y, other.pos.z - self.pos.z)
+    
+    def get_nomalized_vector_to(self, other):
+        return self.get_vector_to(other).normalize()
 
 class Collision:
     def __init__(self) -> None:
@@ -223,7 +263,7 @@ class CollidableActor(Actor):
         
         return self.collision.is_touching(other.collision, self.pos, other.pos)
     
-    def on_collision(self, other):
+    def on_collision(self, other, dt):
         # To be implemented in subclasses
         # print(f"Collision between {self} and {other}")
         ...
@@ -242,18 +282,29 @@ class Player(CollidableActor):
         })
         
         self.swimming_force = Constants.DEFAULT_MOVEMENT_FORCE
-        self.diving_force = Constants.DEFAULT_MOVEMENT_FORCE * 2.0
+        self.diving_force = Constants.DEFAULT_MOVEMENT_FORCE * 3.0
         self.current_force = self.swimming_force
         
         self.is_diving = False
+        
+        self.typ = 0
+        
+        self.renderer.shadow = True
+        self.renderer.set_image(Image("./img/player.png", (64, 64)))
+        # self.renderer.shadow = True
 
     def update(self, dt):
         self.do_movement(dt)
         
-        super().update(dt)
+        if self.typ == 0:
+            super().update(dt)
+        elif self.typ == 1:
+            super().update2(dt)
     
     def draw(self, screen):
-        pg.draw.circle(screen, (0,80,0,0.5), to_vec2(self.pos), self.collision.radius)
+        pg.draw.circle(screen, (0,80,0, 125), to_vec2(self.pos), self.collision.radius)
+        # pg.draw.circle(screen, (0,80,0, 125), to_vec2(self.pos), self.collision.radius)
+        
         super().draw(screen)
 
     def do_movement(self, dt) -> None:
@@ -269,9 +320,6 @@ class Player(CollidableActor):
             self.current_force = self.diving_force
         else:
             self.current_force = self.swimming_force
-            
-    def on_collision(self, other):
-        self.apply_force(other.vel)
 
 
 class Ball(CollidableActor):
@@ -279,6 +327,12 @@ class Ball(CollidableActor):
         super().__init__(x, y, z)
         
         self.radius = 0
+        
+        self.kick_multiplier = 2
+        
+        self.air_friction = Constants.DEFAULT_FRICTION * 1
+        self.water_friction = Constants.DEFAULT_FRICTION * 1.0
+        self.friction = self.air_friction
     
     def set_radius(self, val):
         self.radius = val
@@ -287,10 +341,17 @@ class Ball(CollidableActor):
         
     def draw(self, screen) -> None:
         pg.draw.circle(screen, Colors.GREEN, to_vec2(self.pos), self.radius)
+        
+    def on_collision(self, other, dt):
+        self.apply_force(self.kick_multiplier * other.vel.length() * (1/dt) * -self.get_nomalized_vector_to(other))
 
 
 class Game:
     def __init__(self, caption="My Game", width=640, height=480, **flags) -> None:
+        if Globals.game:
+            raise Exception("There can only be one game")
+        Globals.game = self
+        
         self.dimensions = self.width, self.height = width, height
         self.fps = 60
         self._clock = pg.time.Clock()     ## For syncing the FPS
@@ -306,11 +367,14 @@ class Game:
             if k == "fullscreen" and v:
                 mode = pg.FULLSCREEN
              
-        self.screen: pg.Surface = pg.display.set_mode((width, height), mode)
+        self.screen: pg.Surface = pg.display.set_mode(self.dimensions, mode)
+        self.alpha_screen = pg.Surface(self.dimensions, pg.SRCALPHA)
+
         pg.display.set_caption(caption)
         
         self.frame = 0
         self.prevdt = 1/self.fps
+        
 
     def main(self) -> None:
         # Main game loop.
@@ -327,10 +391,17 @@ class Game:
             
     def init(self):
         player = Player(30, 30) \
-            .set_image(Image("./img/player.png", (64, 64))) \
             .set_collision(SphereCollision(40)) \
             .set_solid(True)
+        player.typ = 0
         self.new_actor(player)
+        
+        # player2 = Player(30, 60) \
+        #     .set_image(Image("./img/player.png", (64, 64))) \
+        #     .set_collision(SphereCollision(40)) \
+        #     .set_solid(True)
+        # player2.typ = 1
+        # self.new_actor(player2)
         
         ball = Ball(200, 200) \
             .set_radius(30) \
@@ -369,17 +440,19 @@ class Game:
                 a1 = self._actors[i]
                 a2 = self._actors[j]
                 if a1.is_touching(a2):
-                    a1.on_collision(a2)
-                    a2.on_collision(a1)
+                    a1.on_collision(a2, dt)
+                    a2.on_collision(a1, dt)
         
     def draw(self, screen) -> None:
         screen.fill(hex_to_rgb(0x0095e9))
+        self.alpha_screen.fill((0,0,0,0))
 
         # Draw
         for a in self._actors:
-            a.draw(screen)
+            a.draw(self.alpha_screen)
 
         # Flip the display so that the things we drew actually show up.
+        screen.blit(self.alpha_screen, (0,0))
         pg.display.flip()
     
     def new_actor(self, actor:Actor):
