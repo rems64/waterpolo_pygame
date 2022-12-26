@@ -93,7 +93,7 @@ class Constants:
     DEFAULT_FRICTION = 5
     DEFAULT_MOVEMENT_FORCE = 3000
 
-    
+
 class Globals:
     game = None
      
@@ -123,8 +123,11 @@ class Image:
         else:
             raise Exception(f"Invalid type given : type(x) = {type(x)}, type(y) = {type(y)}")
     
-class Controls:
+class InputManager:
     def __init__(self, dict) -> None:
+        self.controls = dict
+        self.button_states = {key: 0 for key in dict}
+        
         self.left = dict["left"]
         self.right = dict["right"]
         self.up = dict["up"]
@@ -132,6 +135,58 @@ class Controls:
         self.move = [self.left, self.right, self.up, self.down]
         
         self.dive = dict["dive"]
+    
+    def update(self, dt=0):
+        for button in self.controls:
+            is_down = is_key_down(self.controls[button])
+            past_state = self.button_states[button]
+
+            # 0 = unpressed; 1 = just pressed; 2 = held; 3 = just released
+
+            if is_down:
+                if past_state == 0:
+                    self.button_states[button] = 1
+                elif past_state == 1:
+                    self.button_states[button] = 2
+                elif past_state == 2:
+                    self.button_states[button] = 2
+                elif past_state == 3:
+                    self.button_states[button] = 1
+            else:
+                if past_state == 0:
+                    self.button_states[button] = 0
+                elif past_state == 1:
+                    self.button_states[button] = 3
+                elif past_state == 2:
+                    self.button_states[button] = 3
+                elif past_state == 3:
+                    self.button_states[button] = 0
+                    
+    def is_button_down(self, button):
+        state = self.button_states[button]
+        
+        if state == 1 or state == 2:
+            return True
+        return False
+                    
+    def is_button_pressed(self, button):
+        state = self.button_states[button]
+        return state == 1
+
+    def is_button_released(self, button):
+        state = self.button_states[button]
+        return state == 3
+    
+    def get_directional_vector(self):
+        v = Vec2(0, 0)
+        if self.is_button_down("left"): v.x += -1
+        if self.is_button_down("right"): v.x += 1
+        if self.is_button_down("up"): v.y += -1
+        if self.is_button_down("down"): v.y += 1
+        return normalized(v)
+
+    def get_directional_vector3(self):
+        return to_vec3(self.get_directional_vector())
 
 class Object:
     def __init__(self) -> None:
@@ -139,9 +194,9 @@ class Object:
     
     def delete(self) -> None:
         self._delete_me = True
-        
-        
-        
+
+
+
 class ImageRenderer:
     def __init__(self, **flags) -> None:
         self.shadow = False
@@ -170,7 +225,6 @@ class ImageRenderer:
             
             # if self.shadow and actor.pos.z < 0:
             #     pg.draw.circle(screen, (0,0,0, 125), to_vec2(actor.pos), actor.collision.radius)
-            
 
 
 class Actor(Object):
@@ -188,7 +242,7 @@ class Actor(Object):
         
         self.gravity_force = Vec3(0, 0, -6.674 * 300)
         
-        self.density = 0.2 # 1.0 represents tensity of water
+        self.density = 1 # 1.0 represents tensity of water
         self.buoyancy_force = Vec3()
         
         self.renderer = ImageRenderer()
@@ -255,6 +309,15 @@ class SphereCollision(Collision):
         if isinstance(other, SphereCollision):
             return self.is_touching_sphere_sphere(self, other, self_pos, other_pos)
         
+class BorderCollision(Collision):
+    """
+    Collision that represents the border of the play area. 
+    Is defined by a rectangle, extensing infinitely in the z directoon. 
+    """
+    def __init__(self, a:Vec, b:Vec):
+        self.a = to_vec3(a)
+        self.b = to_vec3(b)
+        
 
 
 class CollidableActor(Actor):
@@ -292,7 +355,7 @@ class Player(CollidableActor):
     def __init__(self, x=0, y=0, z=0) -> None:
         super().__init__(x, y, z)
         
-        self.controls = Controls({
+        self.input_manager = InputManager({
             "left": pg.K_LEFT,
             "right": pg.K_RIGHT,
             "up": pg.K_UP,
@@ -300,8 +363,10 @@ class Player(CollidableActor):
             "dive": pg.K_LSHIFT,
         })
         
+        self.density = 1.0
+        
         self.swimming_force = Constants.DEFAULT_MOVEMENT_FORCE
-        self.diving_force = Constants.DEFAULT_MOVEMENT_FORCE * 3.0
+        self.diving_force = Constants.DEFAULT_MOVEMENT_FORCE * 1.5
         self.current_force = self.swimming_force
         
         self.is_diving = False
@@ -313,9 +378,11 @@ class Player(CollidableActor):
         # self.renderer.shadow = True
 
     def update(self, dt):
+        self.input_manager.update(dt)
         self.do_movement(dt)
         
         super().update(dt)
+        
         
     def draw(self, screen):
         super().draw(screen)
@@ -327,22 +394,27 @@ class Player(CollidableActor):
         
 
     def do_movement(self, dt) -> None:
-        dir = get_directional_vector3(self.controls.move)
+        dir = get_directional_vector3(self.input_manager.move)
         self.apply_force(dir * self.current_force)
 
         self.do_diving(dt)
 
     def do_diving(self, dt) -> None:
-        self.is_diving = is_key_down(self.controls.dive)
+        # If just dived, make the player go down
+        # if not self.is_diving and self.input_manager.is_button_pressed("dive"):
+            # self.apply_force(Vec3(0,0,-10000))
+        
+        self.is_diving = self.input_manager.is_button_down("dive")
         
         if self.is_diving:
             self.current_force = self.diving_force
-            self.apply_force(Vec3(0, 0, -6000))
+            self.density = 1.0
         else:
             self.current_force = self.swimming_force
+            self.density = 0.05
             
-        if is_key_down(pg.K_a):
-            self.apply_force(Vec3(0, 0, 3000))
+        # if is_key_down(pg.K_a):
+        #     self.apply_force(Vec3(0, 0, 3000))
             
 
 
